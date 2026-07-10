@@ -22,6 +22,10 @@ server:
    article_stats_refresh_enabled: ${ARTICLE_STATS_REFRESH_ENABLED:-False}
    # 文章统计刷新间隔 默认300秒
    article_stats_refresh_interval: ${ARTICLE_STATS_REFRESH_INTERVAL:-3600}
+   #每日文章总结推送到飞书等通知渠道，默认开启
+   daily_summary_enabled: ${DAILY_SUMMARY_ENABLED:-True}
+   #每日总结任务cron表达式，默认每天18:00
+   daily_summary_cron: ${DAILY_SUMMARY_CRON:-0 18 * * *}
 
 #数据库连接 例如db:  mysql+pymysql://<username>:<password>@<host>/we-rss?charset=utf8mb4
 #PostgreSQL 连接示例: postgresql://<username>:<password>@<host>/<database>
@@ -57,6 +61,23 @@ notice:
   wechat: "${WECHAT_WEBHOOK}"
   feishu: "${FEISHU_WEBHOOK}"
   custom: "${CUSTOM_WEBHOOK}"
+
+#大模型配置（OpenAI兼容协议，支持智谱/DeepSeek/火山方舟/OpenAI等）
+#用于每日总结的AI摘要生成
+llm:
+  #API基础地址，常见示例：
+  # 智谱GLM: https://open.bigmodel.cn/api/paas/v4
+  # DeepSeek: https://api.deepseek.com/v1
+  # 火山方舟: https://ark.cn-beijing.volces.com/api/v3
+  # OpenAI: https://api.openai.com/v1
+  base_url: ${LLM_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
+  #API Key
+  api_key: ${LLM_API_KEY:-}
+  #模型名称，需与base_url对应的服务匹配
+  # 智谱: glm-4-flash (免费) / glm-4 / glm-4-air
+  # DeepSeek: deepseek-chat
+  # 火山方舟: 需填接入点ID（ep-xxx）
+  model: ${LLM_MODEL:-glm-4-flash}
 
 #安全提示：生产环境请通过环境变量SECRET_KEY设置强随机密钥，不要使用默认值
 secret: ${SECRET_KEY}

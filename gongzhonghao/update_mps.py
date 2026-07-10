@@ -23,13 +23,23 @@ DEFAULT_INTERVAL = 15  # 公众号间隔（秒），避免触发风控
 
 
 def list_mps(token: str) -> list:
-    r = requests.get(
-        f"{BASE}/wx/mps?offset=0&limit=200",
-        headers=auth_headers(token),
-        timeout=30,
-    )
-    r.raise_for_status()
-    return r.json()["data"]["list"]
+    all_mps = []
+    offset = 0
+    while True:
+        r = requests.get(
+            f"{BASE}/wx/mps?offset={offset}&limit=100",
+            headers=auth_headers(token),
+            timeout=30,
+        )
+        r.raise_for_status()
+        data = r.json()["data"]
+        batch = data["list"]
+        all_mps.extend(batch)
+        # 不足一页说明已取完
+        if len(batch) < 100:
+            break
+        offset += 100
+    return all_mps
 
 
 def update_mp(token: str, mp_id: str, pages: int) -> dict:

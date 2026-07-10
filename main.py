@@ -82,6 +82,13 @@ if __name__ == '__main__':
         start_article_stats_refresh()
     else:
         print_warning("文章统计定时刷新任务未启用")
+
+    # 启动每日文章总结推送任务（默认每天18:00）
+    if cfg.get("server.daily_summary_enabled", True):
+        from jobs.daily_summary import start_daily_summary
+        start_daily_summary()
+    else:
+        print_warning("每日文章总结任务未启用")
     
     print("启动服务器")
     AutoReload=cfg.get("server.auto_reload",False)
