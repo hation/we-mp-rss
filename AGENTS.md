@@ -18,3 +18,47 @@ This clone should keep `origin` pointed at your fork and `upstream` pointed at `
 
 ## Security & Configuration Tips
 Do not commit `config.yaml`, `/.env`, tokens, cookies, or data from `data/`. Start from `config.example.yaml` and `/.env.example`, then keep real secrets in local-only config. For deployment environments where WeChat blocks datacenter IPs, prefer the compose `singbox` sidecar and a single `PROXY_URL=` entry in `/.env` instead of modifying host proxy settings or duplicating proxy fields across files. Review `SECURITY.md` before changing auth, webhooks, or access-key flows.
+
+## 公众号运维工具集（gongzhonghao/）
+项目内置一组公众号批量管理脚本，位于 `gongzhonghao/`，在项目根目录用 `.venv/bin/python` 执行。当用户提到"导入公众号/抓取文章/补抓正文/总结内容"等需求时，优先调用对应脚本，而非临时手写命令。完整用法见 `gongzhonghao/README.md`。
+
+公共配置在 `gongzhonghao/_common.py`，支持环境变量覆盖：`WERSS_BASE`（服务地址，默认 `http://localhost:8001/api/v1`）、`WERSS_USER`（默认 `admin`）、`WERSS_PASS`（默认 `admin@123`）、`WERSS_XLSX`（公众号列表，默认 `gongzhonghao/公众号.xlsx`）。
+
+### 脚本速查
+- **import_mps.py** — 批量导入公众号（从 Excel 第一列读名称）
+  - `.venv/bin/python gongzhonghao/import_mps.py`（全部）
+  - `.venv/bin/python gongzhonghao/import_mps.py --limit 3`（先测试3个）
+  - `.venv/bin/python gongzhonghao/import_mps.py --offset 5`（跳过前5个）
+  - `.venv/bin/python gongzhonghao/import_mps.py --file /path/to/other.xlsx`（指定Excel）
+- **update_mps.py** — 批量触发抓取最新文章（接口异步，文章陆续入库）
+  - `.venv/bin/python gongzhonghao/update_mps.py`（全部，默认每公众号2页约10篇）
+  - `.venv/bin/python gongzhonghao/update_mps.py --pages 3`（每公众号3页约15篇）
+  - `.venv/bin/python gongzhonghao/update_mps.py --mp MP_WXS_xxx`（指定公众号，支持ID或名称，逗号分隔）
+  - `.venv/bin/python gongzhonghao/update_mps.py --interval 10`（调整间隔秒数）
+- **sync_content.py** — 批量补抓文章正文（走 api 模式，不依赖 Playwright）
+  - `.venv/bin/python gongzhonghao/sync_content.py`（所有缺正文的）
+  - `.venv/bin/python gongzhonghao/sync_content.py --today`（只补今天的）
+  - `.venv/bin/python gongzhonghao/sync_content.py --days 3`（最近3天）
+  - `.venv/bin/python gongzhonghao/sync_content.py --mp MP_WXS_xxx`（指定公众号）
+  - `.venv/bin/python gongzhonghao/sync_content.py --limit 50`（最多50篇）
+  - `.venv/bin/python gongzhonghao/sync_content.py --force`（强制重抓含已有正文的）
+- **summarize.py** — 文章内容总结（提取纯文本摘要，输出 Markdown）
+  - `.venv/bin/python gongzhonghao/summarize.py`（今天的，默认）
+  - `.venv/bin/python gongzhonghao/summarize.py --days 3`（最近3天）
+  - `.venv/bin/python gongzhonghao/summarize.py --mp MP_WXS_xxx`（指定公众号）
+  - `.venv/bin/python gongzhonghao/summarize.py --output gongzhonghao/summary.md`（输出到文件）
+
+### 典型工作流
+```bash
+# 日常：抓最新 → 补正文 → 生成总结
+.venv/bin/python gongzhonghao/update_mps.py
+.venv/bin/python gongzhonghao/sync_content.py --today
+.venv/bin/python gongzhonghao/summarize.py --output gongzhonghao/summary_$(date +%Y%m%d).md
+```
+
+### 触发规则
+- 用户说"导入公众号" → 跑 `import_mps.py`
+- 用户说"抓文章/抓今天文章/更新文章" → 跑 `update_mps.py`，再视情况补 `sync_content.py --today`
+- 用户说"补正文/抓正文/抓内容" → 跑 `sync_content.py`（默认 `--today`）
+- 用户说"总结/摘要/汇总" → 跑 `summarize.py`
+- 用户说"跑一遍完整流程/每日任务" → 按典型工作流顺序执行三步
