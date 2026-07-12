@@ -94,6 +94,9 @@ class Db:
             if "has_content" not in columns:
                 alter_statements.append("ALTER TABLE articles ADD COLUMN has_content INTEGER DEFAULT 0")
 
+            if "ai_summary" not in columns:
+                alter_statements.append("ALTER TABLE articles ADD COLUMN ai_summary TEXT")
+
             if not alter_statements:
                 return
 

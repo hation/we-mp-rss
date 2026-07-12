@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { ExportTags, ImportTags } from '@/api/export'
-import { listTags, deleteTag } from '@/api/tagManagement'
+import { listTags, deleteTag, generateTagSummary } from '@/api/tagManagement'
 import type { Tag } from '@/types/tagManagement'
 import { Message, Modal } from '@arco-design/web-vue'
-import { IconExport, IconImport } from '@arco-design/web-vue/es/icon'
+import { IconExport, IconImport, IconFile } from '@arco-design/web-vue/es/icon'
 
 const loading = ref(false)
 const loadingMore = ref(false)
@@ -17,6 +17,57 @@ const pagination = ref({
 const isMobile = ref(window.innerWidth < 768)
 const handleResize = () => {
   isMobile.value = window.innerWidth < 768
+}
+
+// 总结弹窗相关
+const summaryModalVisible = ref(false)
+const summaryLoading = ref(false)
+const currentTag = ref<Tag | null>(null)
+const summaryResult = ref('')
+const pushNotice = ref(false)
+const dateRange = ref<[Date, Date] | []>([])
+
+const openSummaryModal = (tag: Tag) => {
+  currentTag.value = tag
+  summaryResult.value = ''
+  // 默认选择最近7天
+  const end = new Date()
+  const start = new Date()
+  start.setDate(start.getDate() - 7)
+  dateRange.value = [start, end]
+  summaryModalVisible.value = true
+}
+
+const handleGenerateSummary = async () => {
+  if (!currentTag.value || !dateRange.value || dateRange.value.length !== 2) {
+    Message.warning('请选择时间范围')
+    return
+  }
+  
+  const [start, end] = dateRange.value
+  const startTime = Math.floor(start.getTime() / 1000)
+  const endTime = Math.floor(end.getTime() / 1000 + 86399) // 结束时间设为当天23:59:59
+  
+  summaryLoading.value = true
+  try {
+    const res = await generateTagSummary(currentTag.value.id, {
+      start_time: startTime,
+      end_time: endTime,
+      push_notice: pushNotice.value
+    })
+    
+    if (res) {
+      const data = (res as any).data ?? res
+      summaryResult.value = data.summary || data.message || '生成成功'
+      Message.success('总结生成成功')
+    }
+  } catch (error: any) {
+    const detail = error.response?.data?.detail
+    const errorMessage = (typeof detail === 'object' && detail.message) ? detail.message : (detail || '生成总结失败')
+    Message.error(errorMessage)
+  } finally {
+    summaryLoading.value = false
+  }
 }
 
 onMounted(() => {
@@ -183,6 +234,9 @@ onMounted(() => {
                 <a-link type="primary" target="_blank" :href="`/feed/tag/${record.id}.rss`">
                   订阅
                 </a-link>
+                <a-button type="text" @click="openSummaryModal(record)">
+                  总结
+                </a-button>
                 <a-button type="text" @click="$router.push(`/tags/edit/${record.id}`)">
                   编辑
                 </a-button>
@@ -216,6 +270,9 @@ onMounted(() => {
               </template>
             </a-list-item-meta>
             <a-space>
+              <a-button type="text" size="small" @click="openSummaryModal(item)">
+                总结
+              </a-button>
               <a-button type="text" size="small" @click="$router.push(`/tags/edit/${item.id}`)">
                 编辑
               </a-button>
@@ -244,6 +301,53 @@ onMounted(() => {
         </template>
       </a-list>
     </a-card>
+
+    <!-- 总结弹窗 -->
+    <a-modal
+      v-model:visible="summaryModalVisible"
+      :title="`生成【${currentTag?.name}】标签总结`"
+      :width="680"
+      @ok="handleGenerateSummary"
+      @cancel="summaryModalVisible = false"
+    >
+      <a-space direction="vertical" :style="{ width: '100%' }" size="large">
+        <a-form layout="vertical">
+          <a-form-item label="时间范围">
+            <a-range-picker
+              v-model="dateRange.value"
+              :style="{ width: '100%' }"
+              format="YYYY-MM-DD"
+              placeholder="请选择开始和结束日期"
+            />
+          </a-form-item>
+          <a-form-item label="通知选项">
+            <a-switch v-model="pushNotice.value" />
+            <span style="margin-left: 8px; color: #86909c;">
+              生成后推送通知到飞书等渠道
+            </span>
+          </a-form-item>
+        </a-form>
+
+        <div v-if="summaryResult">
+          <a-divider>生成结果</a-divider>
+          <a-card :bordered="false" size="small" style="max-height: 400px; overflow-y: auto;">
+            <div style="white-space: pre-wrap; line-height: 1.8;">
+              {{ summaryResult }}
+            </div>
+          </a-card>
+        </div>
+      </a-space>
+
+      <template #footer>
+        <a-space>
+          <a-button @click="summaryModalVisible = false">取消</a-button>
+          <a-button type="primary" :loading="summaryLoading" @click="handleGenerateSummary">
+            <template #icon><icon-file /></template>
+            生成总结
+          </a-button>
+        </a-space>
+      </template>
+    </a-modal>
   </div>
 </template>
 

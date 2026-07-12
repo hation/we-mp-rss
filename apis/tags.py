@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException,status
-from typing import List
+from fastapi import APIRouter, Depends, HTTPException,status, Query
+from typing import List, Optional
 from datetime import datetime
 from core.models.tags import Tags as TagsModel
 from core.database import get_db
@@ -189,3 +189,158 @@ async def delete_tag(tag_id: str, db: Session = Depends(get_db),cur_user: dict =
         return success_response(message="Tag deleted successfully")
     except Exception as e:
         return error_response(code=status.HTTP_201_CREATED, message=str(e))
+
+
+@router.post("/{tag_id}/summary",
+    summary="生成标签下某时间段的文章总结",
+    description="对指定标签下指定时间段的文章进行AI总结"
+)
+async def generate_tag_summary(
+    tag_id: str,
+    start_time: int = Query(..., description="开始时间戳（秒）"),
+    end_time: int = Query(..., description="结束时间戳（秒）"),
+    push_notice: bool = Query(False, description="是否推送通知到飞书等渠道"),
+    db: Session = Depends(get_db),
+    cur_user: dict = Depends(get_current_user_or_ak)
+):
+    """
+    生成标签下某时间段的文章总结
+    
+    参数:
+    - tag_id: 标签ID
+    - start_time: 开始时间戳（秒）
+    - end_time: 结束时间戳（秒）
+    - push_notice: 是否推送通知，默认False
+    
+    返回:
+    - 包含总结内容的响应
+    """
+    import json
+    from core.db import DB
+    from core.models.article import Article
+    from core.models.feed import Feed
+    from jobs.daily_summary import _ai_summarize
+    
+    session = DB.get_session()
+    try:
+        # 查询标签信息
+        tag = session.query(TagsModel).filter(TagsModel.id == tag_id).first()
+        if not tag:
+            return error_response(code=404, message="标签不存在")
+        
+        # 解析关联的公众号ID
+        mps_ids = []
+        if tag.mps_id:
+            try:
+                mps_data = json.loads(tag.mps_id)
+                mps_ids = [str(mp['id']) for mp in mps_data] if isinstance(mps_data, list) else []
+            except (json.JSONDecodeError, TypeError):
+                mps_ids = []
+        
+        if not mps_ids:
+            return error_response(code=400, message="该标签未关联任何公众号")
+        
+        # 查询该时间段内的文章
+        arts = session.query(Article).filter(
+            Article.mp_id.in_(mps_ids),
+            Article.has_content == 1,
+            Article.status != 2,
+            Article.publish_time >= start_time,
+            Article.publish_time <= end_time
+        ).order_by(Article.publish_time.desc()).all()
+        
+        if not arts:
+            return error_response(code=400, message="该时间段内没有文章")
+        
+        # 公众号ID→名称映射
+        feeds = session.query(Feed).filter(Feed.id.in_(mps_ids)).all()
+        feed_map = {f.id: f.mp_name for f in feeds}
+        
+        start_date = datetime.fromtimestamp(start_time).strftime("%Y-%m-%d")
+        end_date = datetime.fromtimestamp(end_time).strftime("%Y-%m-%d")
+        
+        # 预提取每篇文章的纯文本和元数据，优先使用数据库缓存的AI摘要
+        items = []
+        need_ai = []  # 需要调用AI的索引列表
+        for idx, a in enumerate(arts):
+            pt = datetime.fromtimestamp(a.publish_time).strftime("%H:%M")
+            mp_name = feed_map.get(a.mp_id, a.mp_id)
+            cached = (a.ai_summary or "").strip() if hasattr(a, "ai_summary") else ""
+            full_text = _extract_text(a.content, 4000) if not cached else ""
+            items.append({
+                "title": a.title or "(无标题)",
+                "pt": pt,
+                "mp_name": mp_name,
+                "full_text": full_text,
+                "summary": cached,
+                "article_id": a.id,
+            })
+            if not cached:
+                need_ai.append(idx)
+        
+        # 仅对未缓存的文章并发生成AI摘要
+        if need_ai:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=5) as pool:
+                ai_results = list(pool.map(
+                    lambda i: _ai_summarize(items[i]["full_text"], items[i]["title"]),
+                    need_ai,
+                ))
+            # 回填摘要并写入数据库缓存
+            for i, idx in enumerate(need_ai):
+                items[idx]["summary"] = ai_results[i]
+                try:
+                    art = session.query(Article).filter(Article.id == items[idx]["article_id"]).first()
+                    if art is not None:
+                        art.ai_summary = ai_results[i]
+                    session.commit()
+                except Exception as e:
+                    pass
+        
+        # 构建完整的Markdown总结
+        lines = [f"### 📰 【{tag.name}】标签内容总结（{start_date} ~ {end_date}）",
+                 f"共 {len(items)} 篇文章", ""]
+        
+        for i, it in enumerate(items, 1):
+            lines.append(f"**{i}. {it['title']}**")
+            lines.append(f"- ⏰ {it['pt']} ｜ 📢 {it['mp_name']}")
+            lines.append(f"- 摘要：{it['summary']}")
+            lines.append("")
+        
+        summary_md = "\n".join(lines)
+        
+        # 是否推送通知
+        if push_notice:
+            try:
+                from jobs.notice import sys_notice
+                title = f"标签总结：{tag.name}（{start_date}~{end_date}）"
+                sys_notice(text=summary_md, title=title, tag="标签总结")
+            except Exception as e:
+                pass
+        
+        return success_response(data={
+            "tag_name": tag.name,
+            "start_date": start_date,
+            "end_date": end_date,
+            "article_count": len(items),
+            "summary": summary_md,
+            "articles": items
+        })
+        
+    finally:
+        session.close()
+
+
+def _extract_text(html: str, max_len: int = 500) -> str:
+    """从 HTML 提取纯文本摘要"""
+    from bs4 import BeautifulSoup
+    
+    soup = BeautifulSoup(html or "", "html.parser")
+    text = soup.get_text(separator=" ", strip=True)
+    noise = ["微信扫一扫", "知道了", "取消", "允许", "在小说阅读器", "去阅读",
+             "在小说阅读器中沉浸阅读", "使用完整服务", "轻点两下取消赞",
+             "轻点两下取消在看", "使用小程序"]
+    for n in noise:
+        text = text.replace(n, "")
+    text = " ".join(text.split())
+    return text[:max_len]

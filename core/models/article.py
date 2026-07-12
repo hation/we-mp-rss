@@ -43,6 +43,7 @@ class ArticleBase(Base):
 class Article(ArticleBase):
     content = Column(Text)
     content_html = Column(Text)
+    ai_summary = Column(Text)  # AI生成的摘要缓存，避免重复调用大模型
     
     def to_dict(self):
         """将Article对象转换为字典"""
